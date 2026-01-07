@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Session, SessionInfo } from '../types/session';
-import type { VirtualFileSystem } from '../lib/fileSystem';
-import { loadSessionContent, loadUserMessagesForSession } from '../lib/sessionLoader';
+import { createFileSystemFromHandle, type VirtualFileSystem } from '../lib/fileSystem';
+import { loadAllSessions, loadSessionContent, loadUserMessagesForSession } from '../lib/sessionLoader';
 
 /**
  * Represents a session with its child sessions (for branched conversations).
@@ -57,6 +57,15 @@ export interface YearGroup {
   months: MonthGroup[];
 }
 
+/**
+ * Result of comparing old and new session states.
+ */
+export interface SessionChanges {
+  added: string[];
+  removed: string[];
+  updated: string[];
+}
+
 interface SessionState {
   // Session data (single session - existing)
   session: Session | null;
@@ -94,6 +103,11 @@ interface SessionState {
   loadUserMessages: () => Promise<void>;
   clearFolder: () => void;
   browseForFolder: () => Promise<void>;
+  reloadSessions: () => Promise<SessionChanges | null>;
+  compareSessionChanges: (
+    oldSessions: Record<string, SessionInfo>,
+    newSessions: Record<string, SessionInfo>
+  ) => SessionChanges;
 }
 
 /**
@@ -386,10 +400,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     try {
-      // Import the file system adapter dynamically to avoid circular dependencies
-      const { createFileSystemFromHandle } = await import('../lib/fileSystem');
-      const { loadAllSessions } = await import('../lib/sessionLoader');
-
       const directoryHandle = await window.showDirectoryPicker();
       const fs = createFileSystemFromHandle(directoryHandle);
 
@@ -428,6 +438,177 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       } else {
         set({ isLoadingFolder: false });
       }
+    }
+  },
+
+  compareSessionChanges: (
+    oldSessions: Record<string, SessionInfo>,
+    newSessions: Record<string, SessionInfo>
+  ): SessionChanges => {
+    const added: string[] = [];
+    const removed: string[] = [];
+    const updated: string[] = [];
+
+    const oldIds = new Set(Object.keys(oldSessions));
+    const newIds = new Set(Object.keys(newSessions));
+
+    // Find added sessions
+    for (const id of newIds) {
+      if (!oldIds.has(id)) {
+        added.push(id);
+      }
+    }
+
+    // Find removed sessions
+    for (const id of oldIds) {
+      if (!newIds.has(id)) {
+        removed.push(id);
+      }
+    }
+
+    // Find updated sessions (by comparing updated timestamp)
+    for (const id of newIds) {
+      if (oldIds.has(id)) {
+        const oldSession = oldSessions[id];
+        const newSession = newSessions[id];
+        if (newSession.time.updated !== oldSession.time.updated) {
+          updated.push(id);
+        }
+      }
+    }
+
+    return { added, removed, updated };
+  },
+
+  reloadSessions: async (): Promise<SessionChanges | null> => {
+    const state = get();
+    if (!state.fileSystem) {
+      return null;
+    }
+
+    // Capture current UI state before reload
+    const previousSelectedSessionId = state.selectedSessionId;
+    const previousSessions = state.allSessions;
+    const previousSessionTree = state.sessionTree;
+
+    // Find the sibling list for the selected session before reload
+    let previousSiblings: string[] = [];
+    let previousIndex = -1;
+    if (previousSelectedSessionId) {
+      const selectedSession = previousSessions[previousSelectedSessionId];
+      if (selectedSession) {
+        // Find siblings: sessions with the same parentID in the same tree level
+        const findSiblings = (nodes: SessionNode[], parentID: string | undefined): string[] => {
+          for (const node of nodes) {
+            if (node.session.parentID === parentID) {
+              // This level contains sessions with matching parentID
+              // Collect all siblings at this level
+              return nodes
+                .filter((n) => n.session.parentID === parentID)
+                .map((n) => n.session.id);
+            }
+            // Check children recursively
+            const childResult = findSiblings(node.children, parentID);
+            if (childResult.length > 0) {
+              return childResult;
+            }
+          }
+          return [];
+        };
+
+        previousSiblings = findSiblings(previousSessionTree, selectedSession.parentID);
+        previousIndex = previousSiblings.indexOf(previousSelectedSessionId);
+      }
+    }
+
+    try {
+      // Load fresh session data
+      const result = await loadAllSessions(state.fileSystem);
+
+      // Build new allSessions record from projects
+      const newAllSessions: Record<string, SessionInfo> = {};
+      const collectSessions = (nodes: SessionNode[]) => {
+        for (const node of nodes) {
+          newAllSessions[node.session.id] = node.session;
+          collectSessions(node.children);
+        }
+      };
+
+      for (const project of result.projects) {
+        collectSessions(project.sessions);
+      }
+
+      // Compare sessions to detect changes
+      const changes = get().compareSessionChanges(previousSessions, newAllSessions);
+
+      // Merge: preserve userMessages from previous state for sessions that still exist
+      const mergedSessions: Record<string, SessionInfo> = {};
+      for (const [id, sessionInfo] of Object.entries(newAllSessions)) {
+        const previousSession = previousSessions[id];
+        if (previousSession?.userMessages) {
+          mergedSessions[id] = {
+            ...sessionInfo,
+            userMessages: previousSession.userMessages,
+          };
+        } else {
+          mergedSessions[id] = sessionInfo;
+        }
+      }
+
+      // Helper to update SessionNode tree with merged session data
+      const updateSessionTree = (nodes: SessionNode[]): SessionNode[] => {
+        return nodes.map((node) => ({
+          session: mergedSessions[node.session.id] ?? node.session,
+          children: updateSessionTree(node.children),
+        }));
+      };
+
+      // Build updated sessionTree and projects with merged data
+      const updatedProjects = result.projects.map((project) => ({
+        ...project,
+        sessions: updateSessionTree(project.sessions),
+      }));
+      const sessionTree: SessionNode[] = updatedProjects.flatMap((p) => p.sessions);
+
+      // Determine new selectedSessionId
+      let newSelectedSessionId: string | null = null;
+      if (previousSelectedSessionId && mergedSessions[previousSelectedSessionId]) {
+        // Selected session still exists, keep it
+        newSelectedSessionId = previousSelectedSessionId;
+      } else if (previousSelectedSessionId && previousSiblings.length > 0 && previousIndex >= 0) {
+        // Selected session was deleted, try to select nearest sibling
+        // First try next sibling (index + 1, + 2, ...)
+        for (let i = previousIndex + 1; i < previousSiblings.length; i++) {
+          if (mergedSessions[previousSiblings[i]]) {
+            newSelectedSessionId = previousSiblings[i];
+            break;
+          }
+        }
+        // If no next sibling, try previous sibling (index - 1, - 2, ...)
+        if (!newSelectedSessionId) {
+          for (let i = previousIndex - 1; i >= 0; i--) {
+            if (mergedSessions[previousSiblings[i]]) {
+              newSelectedSessionId = previousSiblings[i];
+              break;
+            }
+          }
+        }
+        // If no siblings remain, selection stays null
+      }
+
+      set({
+        projects: updatedProjects,
+        sessionTree,
+        allSessions: mergedSessions,
+        selectedSessionId: newSelectedSessionId,
+        loadError: null,
+      });
+
+      return changes;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to reload sessions';
+      set({ loadError: message });
+      return null;
     }
   },
 }));

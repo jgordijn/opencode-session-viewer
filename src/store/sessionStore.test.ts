@@ -26,7 +26,8 @@ const resetStore = () => {
 const createMockSessionInfo = (
   id: string,
   projectID: string = 'project-1',
-  parentID?: string
+  parentID?: string,
+  options?: { created?: number; updated?: number }
 ): SessionInfo => ({
   id,
   version: '1.0.0',
@@ -35,8 +36,8 @@ const createMockSessionInfo = (
   title: `Session ${id}`,
   parentID,
   time: {
-    created: Date.now(),
-    updated: Date.now(),
+    created: options?.created ?? Date.now(),
+    updated: options?.updated ?? Date.now(),
   },
 });
 
@@ -669,5 +670,506 @@ describe('sessionStore - reactivity', () => {
     const allSessions = useSessionStore.getState().allSessions;
     expect(Object.keys(allSessions).length).toBe(1);
     expect(allSessions['session-1']).toBe(session);
+  });
+});
+
+describe('sessionStore - reloadSessions', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  describe('preserving selectedSessionId', () => {
+    it('preserves selectedSessionId when session still exists after reload', async () => {
+      // Setup: Create initial session state with a selected session
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const session2 = createMockSessionInfo('session-2', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const node2 = createMockSessionNode(session2);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1, node2],
+      };
+
+      // Create file system with session files
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+        ['session/project-1/session-2.json', JSON.stringify(session2)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      useSessionStore.setState({ selectedSessionId: 'session-1' });
+
+      // Reload sessions
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify selected session is preserved
+      expect(useSessionStore.getState().selectedSessionId).toBe('session-1');
+    });
+
+    it('selects next sibling when selected session is deleted and has next sibling', async () => {
+      // Setup: Create initial session state with 3 sibling sessions
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const session2 = createMockSessionInfo('session-2', 'project-1');
+      const session3 = createMockSessionInfo('session-3', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const node2 = createMockSessionNode(session2);
+      const node3 = createMockSessionNode(session3);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1, node2, node3],
+      };
+
+      // File system only has session-1 and session-3 (session-2 was deleted)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+        ['session/project-1/session-3.json', JSON.stringify(session3)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      useSessionStore.setState({ selectedSessionId: 'session-2' });
+
+      // Reload sessions - session-2 no longer exists
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify next sibling (session-3) is selected
+      expect(useSessionStore.getState().selectedSessionId).toBe('session-3');
+    });
+
+    it('selects previous sibling when selected session is deleted and has only previous sibling', async () => {
+      // Setup: Create initial session state with 3 sibling sessions
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const session2 = createMockSessionInfo('session-2', 'project-1');
+      const session3 = createMockSessionInfo('session-3', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const node2 = createMockSessionNode(session2);
+      const node3 = createMockSessionNode(session3);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1, node2, node3],
+      };
+
+      // File system only has session-1 and session-2 (session-3 was deleted)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+        ['session/project-1/session-2.json', JSON.stringify(session2)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      useSessionStore.setState({ selectedSessionId: 'session-3' });
+
+      // Reload sessions - session-3 no longer exists
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify previous sibling (session-2) is selected
+      expect(useSessionStore.getState().selectedSessionId).toBe('session-2');
+    });
+
+    it('clears selection when deleted session has no siblings remaining', async () => {
+      // Setup: Create initial session state with only one session
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      // File system has no sessions (session-1 was deleted)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      useSessionStore.setState({ selectedSessionId: 'session-1' });
+
+      // Reload sessions - session-1 no longer exists and has no siblings
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify selection is cleared
+      expect(useSessionStore.getState().selectedSessionId).toBeNull();
+    });
+
+    it('selects sibling within same parent group for nested sessions', async () => {
+      // Setup: Create a parent session with 2 child sessions
+      const parentSession = createMockSessionInfo('parent', 'project-1');
+      const childSession1 = createMockSessionInfo('child-1', 'project-1', 'parent');
+      const childSession2 = createMockSessionInfo('child-2', 'project-1', 'parent');
+
+      const childNode1 = createMockSessionNode(childSession1);
+      const childNode2 = createMockSessionNode(childSession2);
+      const parentNode = createMockSessionNode(parentSession, [childNode1, childNode2]);
+
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [parentNode],
+      };
+
+      // File system has parent and child-2 (child-1 was deleted)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/parent.json', JSON.stringify(parentSession)],
+        ['session/project-1/child-2.json', JSON.stringify(childSession2)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      useSessionStore.setState({ selectedSessionId: 'child-1' });
+
+      // Reload sessions - child-1 no longer exists
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify sibling in same parent group (child-2) is selected
+      expect(useSessionStore.getState().selectedSessionId).toBe('child-2');
+    });
+
+    it('handles reload when no session was selected', async () => {
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+      // No selected session
+
+      await useSessionStore.getState().reloadSessions();
+
+      // Verify no selection was made
+      expect(useSessionStore.getState().selectedSessionId).toBeNull();
+    });
+  });
+
+  describe('detecting changes', () => {
+    it('detects and reports new sessions', async () => {
+      // Start with one session
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      // File system has two sessions now (session-2 is new)
+      const session2 = createMockSessionInfo('session-2', 'project-1');
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+        ['session/project-1/session-2.json', JSON.stringify(session2)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      const result = await useSessionStore.getState().reloadSessions();
+
+      expect(result?.added).toContain('session-2');
+      expect(result?.removed).toEqual([]);
+      expect(result?.updated).toEqual([]);
+    });
+
+    it('detects and reports removed sessions', async () => {
+      // Start with two sessions
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const session2 = createMockSessionInfo('session-2', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const node2 = createMockSessionNode(session2);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1, node2],
+      };
+
+      // File system only has session-1 (session-2 removed)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      const result = await useSessionStore.getState().reloadSessions();
+
+      expect(result?.added).toEqual([]);
+      expect(result?.removed).toContain('session-2');
+      expect(result?.updated).toEqual([]);
+    });
+
+    it('detects and reports updated sessions by timestamp', async () => {
+      const now = Date.now();
+      // Start with session at time T
+      const session1 = createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 1000,
+        updated: now - 1000,
+      });
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      // File system has session with updated timestamp
+      const updatedSession1 = createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 1000,
+        updated: now, // Updated more recently
+      });
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(updatedSession1)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      const result = await useSessionStore.getState().reloadSessions();
+
+      expect(result?.added).toEqual([]);
+      expect(result?.removed).toEqual([]);
+      expect(result?.updated).toContain('session-1');
+    });
+
+    it('returns null when no file system is set', async () => {
+      const result = await useSessionStore.getState().reloadSessions();
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('state merging', () => {
+    it('updates allSessions with new session data', async () => {
+      const now = Date.now();
+      const session1 = createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 1000,
+        updated: now - 1000,
+      });
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      // File system has updated session with new title
+      const updatedSession1: SessionInfo = {
+        ...session1,
+        title: 'Updated Title',
+        time: { ...session1.time, updated: now },
+      };
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(updatedSession1)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      await useSessionStore.getState().reloadSessions();
+
+      const { allSessions } = useSessionStore.getState();
+      expect(allSessions['session-1'].title).toBe('Updated Title');
+    });
+
+    it('preserves userMessages from previous state when not reloaded', async () => {
+      const session1: SessionInfo = {
+        ...createMockSessionInfo('session-1', 'project-1'),
+        userMessages: ['Previous message'],
+      };
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      // File system has same session (no userMessages in file)
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(createMockSessionInfo('session-1', 'project-1'))],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      await useSessionStore.getState().reloadSessions();
+
+      const { allSessions } = useSessionStore.getState();
+      expect(allSessions['session-1'].userMessages).toEqual(['Previous message']);
+    });
+  });
+
+  describe('loading state', () => {
+    it('does not set isLoadingFolder during reload', async () => {
+      const session1 = createMockSessionInfo('session-1', 'project-1');
+      const node1 = createMockSessionNode(session1);
+      const project: ProjectInfo = {
+        id: 'project-1',
+        path: '/path',
+        sessions: [node1],
+      };
+
+      const files = new Map([
+        ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+        ['session/project-1/session-1.json', JSON.stringify(session1)],
+      ]);
+      const mockFs = createMockFileSystem(files);
+
+      useSessionStore.getState().setFileSystem(mockFs);
+      useSessionStore.getState().setProjects([project]);
+
+      // The reload should complete without setting isLoadingFolder
+      const reloadPromise = useSessionStore.getState().reloadSessions();
+
+      // isLoadingFolder should stay false during reload
+      // (initial browseForFolder sets it, reload should not)
+      expect(useSessionStore.getState().isLoadingFolder).toBe(false);
+
+      await reloadPromise;
+      expect(useSessionStore.getState().isLoadingFolder).toBe(false);
+    });
+  });
+});
+
+describe('sessionStore - compareSessionChanges', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it('identifies added sessions', () => {
+    const oldSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+    };
+    const newSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+      'session-2': createMockSessionInfo('session-2'),
+    };
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual(['session-2']);
+    expect(result.removed).toEqual([]);
+    expect(result.updated).toEqual([]);
+  });
+
+  it('identifies removed sessions', () => {
+    const oldSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+      'session-2': createMockSessionInfo('session-2'),
+    };
+    const newSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+    };
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual([]);
+    expect(result.removed).toEqual(['session-2']);
+    expect(result.updated).toEqual([]);
+  });
+
+  it('identifies updated sessions by updated timestamp', () => {
+    const now = Date.now();
+    const oldSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 2000,
+        updated: now - 2000,
+      }),
+    };
+    const newSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 2000,
+        updated: now - 1000, // More recent
+      }),
+    };
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual([]);
+    expect(result.removed).toEqual([]);
+    expect(result.updated).toEqual(['session-1']);
+  });
+
+  it('handles empty old sessions', () => {
+    const oldSessions: Record<string, SessionInfo> = {};
+    const newSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+    };
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual(['session-1']);
+    expect(result.removed).toEqual([]);
+    expect(result.updated).toEqual([]);
+  });
+
+  it('handles empty new sessions', () => {
+    const oldSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1'),
+    };
+    const newSessions: Record<string, SessionInfo> = {};
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual([]);
+    expect(result.removed).toEqual(['session-1']);
+    expect(result.updated).toEqual([]);
+  });
+
+  it('handles multiple simultaneous changes', () => {
+    const now = Date.now();
+    const oldSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 3000,
+        updated: now - 3000,
+      }),
+      'session-2': createMockSessionInfo('session-2'),
+      'session-3': createMockSessionInfo('session-3'),
+    };
+    const newSessions: Record<string, SessionInfo> = {
+      'session-1': createMockSessionInfo('session-1', 'project-1', undefined, {
+        created: now - 3000,
+        updated: now - 1000, // Updated
+      }),
+      // session-2 removed
+      'session-3': createMockSessionInfo('session-3'), // Unchanged
+      'session-4': createMockSessionInfo('session-4'), // Added
+    };
+
+    const result = useSessionStore.getState().compareSessionChanges(oldSessions, newSessions);
+
+    expect(result.added).toEqual(['session-4']);
+    expect(result.removed).toEqual(['session-2']);
+    expect(result.updated).toEqual(['session-1']);
   });
 });
