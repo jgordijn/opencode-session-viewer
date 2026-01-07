@@ -81,6 +81,7 @@ interface SessionState {
   isLoadingFolder: boolean;
   isLoadingSession: boolean;
   isLoadingMessages: boolean;
+  isReloading: boolean;
   loadError: string | null;
 
   // UI state
@@ -104,6 +105,7 @@ interface SessionState {
   clearFolder: () => void;
   browseForFolder: () => Promise<void>;
   reloadSessions: () => Promise<SessionChanges | null>;
+  reloadFolder: () => Promise<SessionChanges | null>;
   compareSessionChanges: (
     oldSessions: Record<string, SessionInfo>,
     newSessions: Record<string, SessionInfo>
@@ -173,6 +175,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isLoadingFolder: false,
   isLoadingSession: false,
   isLoadingMessages: false,
+  isReloading: false,
   loadError: null,
 
   // UI state - sidebar visible by default
@@ -389,6 +392,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isLoadingFolder: false,
       isLoadingSession: false,
       isLoadingMessages: false,
+      isReloading: false,
       loadError: null,
     });
   },
@@ -609,6 +613,46 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const message = err instanceof Error ? err.message : 'Failed to reload sessions';
       set({ loadError: message });
       return null;
+    }
+  },
+
+  reloadFolder: async (): Promise<SessionChanges | null> => {
+    const state = get();
+    if (!state.fileSystem) {
+      return null;
+    }
+
+    // Guard against concurrent reloads
+    if (state.isReloading) {
+      return null;
+    }
+
+    // Capture the selected session ID before reload
+    const previousSelectedSessionId = state.selectedSessionId;
+
+    set({ isReloading: true });
+
+    try {
+      const changes = await get().reloadSessions();
+
+      // Explicitly verify and restore selection after reload
+      // reloadSessions() already handles this, but we verify here for clarity
+      const currentState = get();
+      if (previousSelectedSessionId) {
+        if (currentState.allSessions[previousSelectedSessionId]) {
+          // Session still exists - ensure it's still selected
+          // (reloadSessions should have preserved it, but verify)
+          if (currentState.selectedSessionId !== previousSelectedSessionId) {
+            set({ selectedSessionId: previousSelectedSessionId });
+          }
+        }
+        // If session no longer exists, reloadSessions() already handled
+        // selecting a sibling or clearing selection
+      }
+
+      return changes;
+    } finally {
+      set({ isReloading: false });
     }
   },
 }));

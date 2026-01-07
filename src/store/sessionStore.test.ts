@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSessionStore, type SessionNode, type ProjectInfo } from './sessionStore';
 import type { SessionInfo } from '../types/session';
 import type { VirtualFileSystem } from '../lib/fileSystem';
+import { createFileSystemMock } from '../test-utils/fileSystemMocks';
 
 // Helper to reset store state between tests
 const resetStore = () => {
@@ -17,6 +18,7 @@ const resetStore = () => {
     isLoadingFolder: false,
     isLoadingSession: false,
     isLoadingMessages: false,
+    isReloading: false,
     loadError: null,
     sidebarOpen: true,
   });
@@ -49,60 +51,6 @@ const createMockSessionNode = (
   session,
   children,
 });
-
-// Helper to create mock VirtualFileSystem
-const createMockFileSystem = (files: Map<string, string>): VirtualFileSystem => {
-  // Build set of directories for listing
-  const directories = new Set<string>();
-  directories.add(''); // root
-
-  for (const filePath of files.keys()) {
-    const segments = filePath.split('/');
-    for (let i = 1; i < segments.length; i++) {
-      directories.add(segments.slice(0, i).join('/'));
-    }
-  }
-
-  return {
-    readFile: vi.fn().mockImplementation(async (path: string[]) => {
-      const pathString = path.join('/');
-      return files.get(pathString) ?? null;
-    }),
-    listDirectory: vi.fn().mockImplementation(async (path: string[]) => {
-      const pathString = path.join('/');
-
-      // If path is a file, return empty
-      if (files.has(pathString)) {
-        return [];
-      }
-
-      // If path doesn't exist as a directory, return empty
-      if (pathString !== '' && !directories.has(pathString)) {
-        return [];
-      }
-
-      const prefix = pathString === '' ? '' : pathString + '/';
-      const entries = new Set<string>();
-
-      for (const filePath of files.keys()) {
-        if (pathString === '' || filePath.startsWith(prefix)) {
-          const relativePath = pathString === '' ? filePath : filePath.slice(prefix.length);
-          const firstSegment = relativePath.split('/')[0];
-          if (firstSegment) {
-            entries.add(firstSegment);
-          }
-        }
-      }
-
-      return Array.from(entries);
-    }),
-    exists: vi.fn().mockImplementation(async (path: string[]) => {
-      if (path.length === 0) return true;
-      const pathString = path.join('/');
-      return files.has(pathString) || directories.has(pathString);
-    }),
-  };
-};
 
 describe('sessionStore - multi-session state', () => {
   beforeEach(() => {
@@ -138,6 +86,10 @@ describe('sessionStore - multi-session state', () => {
       expect(useSessionStore.getState().isLoadingSession).toBe(false);
     });
 
+    it('has isReloading as false', () => {
+      expect(useSessionStore.getState().isReloading).toBe(false);
+    });
+
     it('has null loadError', () => {
       expect(useSessionStore.getState().loadError).toBeNull();
     });
@@ -145,7 +97,7 @@ describe('sessionStore - multi-session state', () => {
 
   describe('setFileSystem', () => {
     it('sets the file system', () => {
-      const mockFs = createMockFileSystem(new Map());
+      const mockFs = createFileSystemMock(new Map());
 
       useSessionStore.getState().setFileSystem(mockFs);
 
@@ -295,7 +247,7 @@ describe('sessionStore - multi-session state', () => {
         ['message/session-1/msg-1.json', JSON.stringify(msgInfo)],
         ['part/msg-1/part-1.json', JSON.stringify(partInfo)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       const node = createMockSessionNode(sessionInfo);
       const project: ProjectInfo = {
@@ -318,7 +270,7 @@ describe('sessionStore - multi-session state', () => {
     it('sets isLoadingSession during load', async () => {
       const sessionInfo = createMockSessionInfo('session-1', 'project-1');
       const files = new Map<string, string>(); // Empty - no messages
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       const node = createMockSessionNode(sessionInfo);
       const project: ProjectInfo = {
@@ -341,7 +293,7 @@ describe('sessionStore - multi-session state', () => {
 
     it('loads session with empty messages when no message files exist', async () => {
       const sessionInfo = createMockSessionInfo('session-1', 'project-1');
-      const mockFs = createMockFileSystem(new Map()); // Empty - no messages
+      const mockFs = createFileSystemMock(new Map()); // Empty - no messages
 
       const node = createMockSessionNode(sessionInfo);
       const project: ProjectInfo = {
@@ -375,7 +327,7 @@ describe('sessionStore - multi-session state', () => {
         ['message/session-1/msg-1.json', JSON.stringify(validMsgInfo)],
         ['message/session-1/corrupted.json', 'not valid json {{{'],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       const node = createMockSessionNode(sessionInfo);
       const project: ProjectInfo = {
@@ -418,7 +370,7 @@ describe('sessionStore - multi-session state', () => {
   describe('clearFolder', () => {
     it('resets all multi-session state', () => {
       // Set up some state
-      const mockFs = createMockFileSystem(new Map());
+      const mockFs = createFileSystemMock(new Map());
       const session = createMockSessionInfo('session-1', 'project-1');
       const node = createMockSessionNode(session);
       const project: ProjectInfo = {
@@ -525,7 +477,7 @@ describe('sessionStore - loadUserMessages', () => {
       path: '/path',
       sessions: [node],
     };
-    const mockFs = createMockFileSystem(new Map());
+    const mockFs = createFileSystemMock(new Map());
 
     useSessionStore.getState().setFileSystem(mockFs);
     useSessionStore.getState().setProjects([project]);
@@ -587,7 +539,7 @@ describe('sessionStore - loadUserMessages', () => {
       ['part/msg-1/part-1.json', JSON.stringify(textPart1)],
       ['part/msg-2/part-2.json', JSON.stringify(textPart2)],
     ]);
-    const mockFs = createMockFileSystem(files);
+    const mockFs = createFileSystemMock(files);
 
     useSessionStore.getState().setFileSystem(mockFs);
     useSessionStore.getState().setProjects([project]);
@@ -607,7 +559,7 @@ describe('sessionStore - loadUserMessages', () => {
       path: '/path',
       sessions: [node],
     };
-    const mockFs = createMockFileSystem(new Map()); // No message files
+    const mockFs = createFileSystemMock(new Map()); // No message files
 
     useSessionStore.getState().setFileSystem(mockFs);
     useSessionStore.getState().setProjects([project]);
@@ -624,6 +576,14 @@ describe('sessionStore - loadUserMessages', () => {
     useSessionStore.getState().clearFolder();
 
     expect(useSessionStore.getState().isLoadingMessages).toBe(false);
+  });
+
+  it('clears isReloading in clearFolder', () => {
+    useSessionStore.setState({ isReloading: true });
+
+    useSessionStore.getState().clearFolder();
+
+    expect(useSessionStore.getState().isReloading).toBe(false);
   });
 });
 
@@ -697,7 +657,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/session-1.json', JSON.stringify(session1)],
         ['session/project-1/session-2.json', JSON.stringify(session2)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -730,7 +690,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/session-1.json', JSON.stringify(session1)],
         ['session/project-1/session-3.json', JSON.stringify(session3)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -763,7 +723,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/session-1.json', JSON.stringify(session1)],
         ['session/project-1/session-2.json', JSON.stringify(session2)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -790,7 +750,7 @@ describe('sessionStore - reloadSessions', () => {
       const files = new Map([
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -825,7 +785,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/parent.json', JSON.stringify(parentSession)],
         ['session/project-1/child-2.json', JSON.stringify(childSession2)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -851,7 +811,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(session1)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -882,7 +842,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/session-1.json', JSON.stringify(session1)],
         ['session/project-1/session-2.json', JSON.stringify(session2)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -911,7 +871,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(session1)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -946,7 +906,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(updatedSession1)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -989,7 +949,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(updatedSession1)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -1017,7 +977,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(createMockSessionInfo('session-1', 'project-1'))],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -1043,7 +1003,7 @@ describe('sessionStore - reloadSessions', () => {
         ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
         ['session/project-1/session-1.json', JSON.stringify(session1)],
       ]);
-      const mockFs = createMockFileSystem(files);
+      const mockFs = createFileSystemMock(files);
 
       useSessionStore.getState().setFileSystem(mockFs);
       useSessionStore.getState().setProjects([project]);
@@ -1058,6 +1018,290 @@ describe('sessionStore - reloadSessions', () => {
       await reloadPromise;
       expect(useSessionStore.getState().isLoadingFolder).toBe(false);
     });
+  });
+});
+
+describe('sessionStore - reloadFolder', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it('returns null when no file system is set', async () => {
+    const result = await useSessionStore.getState().reloadFolder();
+
+    expect(result).toBeNull();
+  });
+
+  it('sets isReloading to true during reload', async () => {
+    const session = createMockSessionInfo('session-1', 'project-1');
+    const node = createMockSessionNode(session);
+    const project: ProjectInfo = {
+      id: 'project-1',
+      path: '/path',
+      sessions: [node],
+    };
+
+    const files = new Map([
+      ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+      ['session/project-1/session-1.json', JSON.stringify(session)],
+    ]);
+
+    // Build directories set for the mock
+    const directories = new Set<string>();
+    directories.add('');
+    for (const filePath of files.keys()) {
+      const segments = filePath.split('/');
+      for (let i = 1; i < segments.length; i++) {
+        directories.add(segments.slice(0, i).join('/'));
+      }
+    }
+
+    // Create a deferred promise to control when file system operations complete
+    let resolveDeferred: () => void;
+    const deferredPromise = new Promise<void>((resolve) => {
+      resolveDeferred = resolve;
+    });
+
+    // Create a mock file system that waits for our signal before returning
+    const mockFs: VirtualFileSystem = {
+      readFile: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        const pathString = path.join('/');
+        return files.get(pathString) ?? null;
+      }),
+      listDirectory: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        const pathString = path.join('/');
+
+        // If path is a file, return empty
+        if (files.has(pathString)) {
+          return [];
+        }
+
+        // If path doesn't exist as a directory, return empty
+        if (pathString !== '' && !directories.has(pathString)) {
+          return [];
+        }
+
+        const prefix = pathString === '' ? '' : pathString + '/';
+        const entries = new Set<string>();
+
+        for (const filePath of files.keys()) {
+          if (pathString === '' || filePath.startsWith(prefix)) {
+            const relativePath = pathString === '' ? filePath : filePath.slice(prefix.length);
+            const firstSegment = relativePath.split('/')[0];
+            if (firstSegment) {
+              entries.add(firstSegment);
+            }
+          }
+        }
+
+        return Array.from(entries);
+      }),
+      exists: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        if (path.length === 0) return true;
+        const pathString = path.join('/');
+        return files.has(pathString) || directories.has(pathString);
+      }),
+    };
+
+    useSessionStore.getState().setFileSystem(mockFs);
+    useSessionStore.getState().setProjects([project]);
+
+    // Start reload without await
+    const reloadPromise = useSessionStore.getState().reloadFolder();
+
+    // isReloading should be true during reload (deterministically, since FS is blocked)
+    expect(useSessionStore.getState().isReloading).toBe(true);
+
+    // Release the deferred promise to let the reload complete
+    resolveDeferred!();
+
+    await reloadPromise;
+
+    // isReloading should be false after reload completes
+    expect(useSessionStore.getState().isReloading).toBe(false);
+  });
+
+  it('returns null immediately when reload is already in progress', async () => {
+    const session = createMockSessionInfo('session-1', 'project-1');
+    const node = createMockSessionNode(session);
+    const project: ProjectInfo = {
+      id: 'project-1',
+      path: '/path',
+      sessions: [node],
+    };
+
+    const files = new Map([
+      ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+      ['session/project-1/session-1.json', JSON.stringify(session)],
+    ]);
+
+    // Build directories set for the mock
+    const directories = new Set<string>();
+    directories.add('');
+    for (const filePath of files.keys()) {
+      const segments = filePath.split('/');
+      for (let i = 1; i < segments.length; i++) {
+        directories.add(segments.slice(0, i).join('/'));
+      }
+    }
+
+    // Create a deferred promise to control when file system operations complete
+    let resolveDeferred: () => void;
+    const deferredPromise = new Promise<void>((resolve) => {
+      resolveDeferred = resolve;
+    });
+
+    // Create a mock file system that waits for our signal before returning
+    const mockFs: VirtualFileSystem = {
+      readFile: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        const pathString = path.join('/');
+        return files.get(pathString) ?? null;
+      }),
+      listDirectory: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        const pathString = path.join('/');
+
+        // If path is a file, return empty
+        if (files.has(pathString)) {
+          return [];
+        }
+
+        // If path doesn't exist as a directory, return empty
+        if (pathString !== '' && !directories.has(pathString)) {
+          return [];
+        }
+
+        const prefix = pathString === '' ? '' : pathString + '/';
+        const entries = new Set<string>();
+
+        for (const filePath of files.keys()) {
+          if (pathString === '' || filePath.startsWith(prefix)) {
+            const relativePath = pathString === '' ? filePath : filePath.slice(prefix.length);
+            const firstSegment = relativePath.split('/')[0];
+            if (firstSegment) {
+              entries.add(firstSegment);
+            }
+          }
+        }
+
+        return Array.from(entries);
+      }),
+      exists: vi.fn().mockImplementation(async (path: string[]) => {
+        await deferredPromise;
+        if (path.length === 0) return true;
+        const pathString = path.join('/');
+        return files.has(pathString) || directories.has(pathString);
+      }),
+    };
+
+    useSessionStore.getState().setFileSystem(mockFs);
+    useSessionStore.getState().setProjects([project]);
+
+    // Start first reload without await
+    const firstReloadPromise = useSessionStore.getState().reloadFolder();
+
+    // Verify isReloading is true (deterministically, since FS is blocked)
+    expect(useSessionStore.getState().isReloading).toBe(true);
+
+    // Try to start a second reload while first is in progress
+    const secondResult = await useSessionStore.getState().reloadFolder();
+
+    // Second call should return null immediately due to guard
+    expect(secondResult).toBeNull();
+
+    // Release the deferred promise to let the first reload complete
+    resolveDeferred!();
+
+    // Wait for first reload to complete
+    const firstResult = await firstReloadPromise;
+
+    // First reload should complete successfully
+    expect(firstResult).not.toBeNull();
+    expect(useSessionStore.getState().isReloading).toBe(false);
+  });
+
+  it('delegates to reloadSessions and returns changes', async () => {
+    const session1 = createMockSessionInfo('session-1', 'project-1');
+    const node1 = createMockSessionNode(session1);
+    const project: ProjectInfo = {
+      id: 'project-1',
+      path: '/path',
+      sessions: [node1],
+    };
+
+    // File system has two sessions now (session-2 is new)
+    const session2 = createMockSessionInfo('session-2', 'project-1');
+    const files = new Map([
+      ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+      ['session/project-1/session-1.json', JSON.stringify(session1)],
+      ['session/project-1/session-2.json', JSON.stringify(session2)],
+    ]);
+    const mockFs = createFileSystemMock(files);
+
+    useSessionStore.getState().setFileSystem(mockFs);
+    useSessionStore.getState().setProjects([project]);
+
+    const result = await useSessionStore.getState().reloadFolder();
+
+    // Should detect the new session
+    expect(result?.added).toContain('session-2');
+  });
+
+  it('preserves selectedSessionId during reload', async () => {
+    const session1 = createMockSessionInfo('session-1', 'project-1');
+    const session2 = createMockSessionInfo('session-2', 'project-1');
+    const node1 = createMockSessionNode(session1);
+    const node2 = createMockSessionNode(session2);
+    const project: ProjectInfo = {
+      id: 'project-1',
+      path: '/path',
+      sessions: [node1, node2],
+    };
+
+    const files = new Map([
+      ['session/project-1/project.json', JSON.stringify({ path: '/path' })],
+      ['session/project-1/session-1.json', JSON.stringify(session1)],
+      ['session/project-1/session-2.json', JSON.stringify(session2)],
+    ]);
+    const mockFs = createFileSystemMock(files);
+
+    useSessionStore.getState().setFileSystem(mockFs);
+    useSessionStore.getState().setProjects([project]);
+    useSessionStore.setState({ selectedSessionId: 'session-1' });
+
+    await useSessionStore.getState().reloadFolder();
+
+    // Selection should be preserved
+    expect(useSessionStore.getState().selectedSessionId).toBe('session-1');
+  });
+
+  it('sets isReloading to false on error', async () => {
+    const session = createMockSessionInfo('session-1', 'project-1');
+    const node = createMockSessionNode(session);
+    const project: ProjectInfo = {
+      id: 'project-1',
+      path: '/path',
+      sessions: [node],
+    };
+
+    // Create a mock file system that throws an error
+    const mockFs: VirtualFileSystem = {
+      readFile: vi.fn().mockRejectedValue(new Error('Read error')),
+      listDirectory: vi.fn().mockRejectedValue(new Error('List error')),
+      exists: vi.fn().mockResolvedValue(true),
+    };
+
+    useSessionStore.getState().setFileSystem(mockFs);
+    useSessionStore.getState().setProjects([project]);
+
+    await useSessionStore.getState().reloadFolder();
+
+    // isReloading should be false after error
+    expect(useSessionStore.getState().isReloading).toBe(false);
   });
 });
 

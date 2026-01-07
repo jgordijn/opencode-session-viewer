@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { SessionBrowser } from './SessionBrowser';
 import { useSessionStore, type ProjectInfo } from '../store/sessionStore';
+import { createMinimalFileSystemMock } from '../test-utils/fileSystemMocks';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -140,6 +141,8 @@ describe('SessionBrowser', () => {
       selectedSessionId: null,
       selectSession: mockSelectSession,
       clearFolder: mockClearFolder,
+      reloadFolder: vi.fn(),
+      isReloading: false,
     } as ReturnType<typeof useSessionStore>);
   });
 
@@ -203,6 +206,8 @@ describe('SessionBrowser', () => {
         selectedSessionId: null,
         selectSession: mockSelectSession,
         clearFolder: mockClearFolder,
+        reloadFolder: vi.fn(),
+        isReloading: false,
       } as ReturnType<typeof useSessionStore>);
 
       render(<SessionBrowser sidebarOpen={true} />);
@@ -300,6 +305,8 @@ describe('SessionBrowser', () => {
         selectedSessionId: 'session-1',
         selectSession: mockSelectSession,
         clearFolder: mockClearFolder,
+        reloadFolder: vi.fn(),
+        isReloading: false,
       } as ReturnType<typeof useSessionStore>);
 
       render(<SessionBrowser sidebarOpen={true} />);
@@ -369,6 +376,91 @@ describe('SessionBrowser', () => {
       fireEvent.click(changeFolderButton);
 
       expect(mockClearFolder).toHaveBeenCalled();
+    });
+  });
+
+  describe('reload folder', () => {
+    const mockReloadFolder = vi.fn();
+
+    beforeEach(() => {
+      mockReloadFolder.mockReset();
+      mockReloadFolder.mockResolvedValue({ added: [], removed: [], updated: [] });
+    });
+
+    it('renders Reload button next to Change Folder', () => {
+      const mockProjects = createMockProjects();
+      vi.mocked(useSessionStore).mockReturnValue({
+        projects: mockProjects,
+        allSessions: buildAllSessions(mockProjects),
+        selectedSessionId: null,
+        selectSession: mockSelectSession,
+        clearFolder: mockClearFolder,
+        reloadFolder: mockReloadFolder,
+        isReloading: false,
+        fileSystem: createMinimalFileSystemMock(),
+      } as unknown as ReturnType<typeof useSessionStore>);
+
+      render(<SessionBrowser sidebarOpen={true} />);
+
+      expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    });
+
+    it('calls reloadFolder when clicking Reload button', () => {
+      const mockProjects = createMockProjects();
+      vi.mocked(useSessionStore).mockReturnValue({
+        projects: mockProjects,
+        allSessions: buildAllSessions(mockProjects),
+        selectedSessionId: null,
+        selectSession: mockSelectSession,
+        clearFolder: mockClearFolder,
+        reloadFolder: mockReloadFolder,
+        isReloading: false,
+        fileSystem: createMinimalFileSystemMock(),
+      } as unknown as ReturnType<typeof useSessionStore>);
+
+      render(<SessionBrowser sidebarOpen={true} />);
+
+      const reloadButton = screen.getByRole('button', { name: 'Reload' });
+      fireEvent.click(reloadButton);
+
+      expect(mockReloadFolder).toHaveBeenCalled();
+    });
+
+    it('disables Reload button when isReloading is true', () => {
+      const mockProjects = createMockProjects();
+      vi.mocked(useSessionStore).mockReturnValue({
+        projects: mockProjects,
+        allSessions: buildAllSessions(mockProjects),
+        selectedSessionId: null,
+        selectSession: mockSelectSession,
+        clearFolder: mockClearFolder,
+        reloadFolder: mockReloadFolder,
+        isReloading: true,
+        fileSystem: createMinimalFileSystemMock(),
+      } as unknown as ReturnType<typeof useSessionStore>);
+
+      render(<SessionBrowser sidebarOpen={true} />);
+
+      const reloadButton = screen.getByRole('button', { name: 'Reload' });
+      expect(reloadButton).toBeDisabled();
+    });
+
+    it('hides Reload button when no folder is loaded', () => {
+      const mockProjects = createMockProjects();
+      vi.mocked(useSessionStore).mockReturnValue({
+        projects: mockProjects,
+        allSessions: buildAllSessions(mockProjects),
+        selectedSessionId: null,
+        selectSession: mockSelectSession,
+        clearFolder: mockClearFolder,
+        reloadFolder: mockReloadFolder,
+        isReloading: false,
+        fileSystem: null, // No folder loaded
+      } as unknown as ReturnType<typeof useSessionStore>);
+
+      render(<SessionBrowser sidebarOpen={true} />);
+
+      expect(screen.queryByRole('button', { name: 'Reload' })).not.toBeInTheDocument();
     });
   });
 
@@ -535,6 +627,8 @@ describe('SessionBrowser', () => {
         selectedSessionId: null,
         selectSession: mockSelectSession,
         clearFolder: mockClearFolder,
+        reloadFolder: vi.fn(),
+        isReloading: false,
       } as ReturnType<typeof useSessionStore>);
 
       rerender(<SessionBrowser sidebarOpen={true} />);
@@ -571,6 +665,8 @@ describe('SessionBrowser', () => {
         selectedSessionId: null,
         selectSession: mockSelectSession,
         clearFolder: mockClearFolder,
+        reloadFolder: vi.fn(),
+        isReloading: false,
       } as ReturnType<typeof useSessionStore>);
 
       render(<SessionBrowser sidebarOpen={true} />);
@@ -627,6 +723,8 @@ describe('SessionBrowser', () => {
         selectedSessionId: null,
         selectSession: mockSelectSession,
         clearFolder: mockClearFolder,
+        reloadFolder: vi.fn(),
+        isReloading: false,
       } as ReturnType<typeof useSessionStore>);
 
       render(<SessionBrowser sidebarOpen={true} />);

@@ -447,7 +447,7 @@ function GroupingModeSelector({
  * - Preferences persisted to localStorage
  */
 export function SessionBrowser({ sidebarOpen, onCloseSidebar }: SessionBrowserProps) {
-  const { projects, selectedSessionId, selectSession, clearFolder, isLoadingFolder, allSessions } = useSessionStore();
+  const { projects, selectedSessionId, selectSession, clearFolder, reloadFolder, isLoadingFolder, isReloading, allSessions, fileSystem } = useSessionStore();
   const { width, groupingMode, selectedDirectory, setWidth, setGroupingMode, setSelectedDirectory, minWidth, maxWidth } = useSidebarPreferences();
   const [currentWidth, setCurrentWidth] = useState(width);
   
@@ -724,6 +724,11 @@ export function SessionBrowser({ sidebarOpen, onCloseSidebar }: SessionBrowserPr
     clearFolder();
   }, [clearFolder]);
 
+  const handleReloadFolder = useCallback(() => {
+    if (!reloadFolder) return;
+    void reloadFolder();
+  }, [reloadFolder]);
+
   const handleResize = useCallback((deltaX: number) => {
     setCurrentWidth((prev) => Math.min(maxWidth, Math.max(minWidth, prev + deltaX)));
   }, [minWidth, maxWidth]);
@@ -850,11 +855,20 @@ export function SessionBrowser({ sidebarOpen, onCloseSidebar }: SessionBrowserPr
         )}
       </div>
 
-      {/* Change folder button */}
-      <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+      {/* Change folder and reload buttons */}
+      <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex gap-2">
+        {fileSystem && (
+          <button
+            onClick={handleReloadFolder}
+            disabled={isReloading}
+            className="flex-1 py-2 px-4 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+          >
+            Reload
+          </button>
+        )}
         <button
           onClick={handleChangeFolder}
-          className="w-full py-2 px-4 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+          className="flex-1 py-2 px-4 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
         >
           Change Folder
         </button>
