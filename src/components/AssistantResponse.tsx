@@ -87,10 +87,20 @@ export function AssistantResponse({ messages, messageId, defaultExpanded = true 
    let totalDuration: number | undefined;
    if (messages.length > 0) {
      const firstCreated = messages[0].info.time.created;
-     const lastMessage = messages[messages.length - 1];
-     const lastCompleted = lastMessage.info.time.completed;
-     if (lastCompleted) {
-       totalDuration = lastCompleted - firstCreated;
+     // Try to find the last completed message, or use the last message's created time as fallback
+     let lastTime: number | undefined;
+     for (let i = messages.length - 1; i >= 0; i--) {
+       if (messages[i].info.time.completed) {
+         lastTime = messages[i].info.time.completed;
+         break;
+       }
+     }
+     // If no completed time found, use the last message's created time
+     if (!lastTime && messages.length > 0) {
+       lastTime = messages[messages.length - 1].info.time.created;
+     }
+     if (lastTime && firstCreated) {
+       totalDuration = lastTime - firstCreated;
      }
    }
 
